@@ -1,116 +1,276 @@
 public class PPU {
     private final MMU mmu;
-    private final Display display;
-    private int cyclesCount = 0;
-    private final int[] frameBuffer = new int[Display.WIDTH * Display.HEIGHT];
+    private final int[] screenBuffer = new int[160 * 144];
+    private int cycleCounter = 0;
 
-    private static final int[] PALETTE = {
-        0xE0F8D0,
-        0x88C070,
-        0x346856,
-        0x081820
+    private static final int[] PALETTE_COLORS = {
+        0xFFE0F8D0,
+        0xFF88C070,
+        0xFF346856,
+        0xFF081820
     };
 
-    public PPU(MMU mmu, Display display) {
+    public PPU(MMU mmu) {
         this.mmu = mmu;
-        this.display = display;
     }
 
-    public void step(int cycles) {
-        cyclesCount += cycles;
-
-        int currentLine = mmu.readByte(0xFF44);
-        int stat = mmu.readByte(0xFF41);
-
-        if (currentLine >= 144) {
-            stat = (stat & ~0x03) | 0x01;
-        } else if (cyclesCount < 80) {
-            stat = (stat & ~0x03) | 0x02;
-        } else if (cyclesCount < 248) {
-            stat = (stat & ~0x03) | 0x03;
-        } else {
-            stat = (stat & ~0x03) | 0x00;
-        }
-        mmu.writeByte(0xFF41, stat);
-
-        if (cyclesCount >= 456) {
-            cyclesCount -= 456;
-
-            if (currentLine < 144) {
-                renderScanline(currentLine);
-            }
-
-            currentLine++;
-
-            if (currentLine == 144) {
-                display.render(frameBuffer);
-                int ifReg = mmu.readByte(0xFF0F);
-                mmu.writeByte(0xFF0F, ifReg | 0x01);
-            } else if (currentLine > 153) {
-                currentLine = 0;
-            }
-
-            mmu.setLYDirect(currentLine);
-        }
-    }
-
-    private void renderScanline(int line) {
+    public void step(int tCycles) {
         int lcdc = mmu.readByte(0xFF40);
+        boolean lcdEnabled = (lcdc & 0x80) != 0;
 
-        if ((lcdc & 0x80) == 0) {
-            for (int x = 0; x < Display.WIDTH; x++) {
-                frameBuffer[line * Display.WIDTH + x] = PALETTE[0];
-            }
+        if (!lcdEnabled) {
+            cycleCounter = 0;
+            mmu.setLyDirectly(0);
+            setLcdStatusMode(0);
             return;
         }
 
-        boolean windowEnable = (lcdc & 0x20) != 0;
-        int wy = mmu.readByte(0xFF4A);
-        int wx = mmu.readByte(0xFF4B) - 7;
-        boolean renderWindow = windowEnable && line >= wy;
+        cycleCounter += tCycles;
+        int currentLy = mmu.readByte(0xFF44);
 
-        int bgMapAddress = ((lcdc & 0x08) != 0) ? 0x9C00 : 0x9800;
-        int winMapAddress = ((lcdc & 0x40) != 0) ? 0x9C00 : 0x9800;
+        if (cycleCounter >= 456) {
+            cycleCounter -= 456;
+            currentLy = (currentLy + 1) % 154;
+            mmu.setLyDirectly(currentLy);
 
-        boolean unsignedMode = (lcdc & 0x10) != 0;
-        int bgp = mmu.readByte(0xFF47);
-        int scy = mmu.readByte(0xFF42);
-        int scx = mmu.readByte(0xFF43);
+            checkCoincidenceFlag(currentLy);
 
-        for (int x = 0; x < Display.WIDTH; x++) {
-            boolean useWindow = renderWindow && x >= wx;
-            int pixelX, pixelY, tileMapAddress;
+            if (currentLy == 144) {
+                int ifReg = mmu.readByte(0xFF0F);
+                mmu.writeByte(0xFF0F, ifReg | 0x01);
 
-            if (useWindow) {
-                pixelX = x - wx;
-                pixelY = line - wy;
-                tileMapAddress = winMapAddress;
-            } else {
-                pixelX = (x + scx) & 0xFF;
-                pixelY = (line + scy) & 0xFF;
-                tileMapAddress = bgMapAddress;
+                checkStatInterrupt(1);
             }
+        }
 
-            int tileX = (pixelX / 8) & 0x1F;
-            int tileY = (pixelY / 8) & 0x1F;
-            int tileIndex = mmu.readByte(tileMapAddress + (tileY * 32) + tileX);
+        if (currentLy >= 144) {
+            setLcdStatusMode(1);
+        } else {
+            if (cycleCounter < 80) {
+                setLcdStatusMode(2);
+                checkStatInterrupt(2);
+            } else if (cycleCounter < 80 + 172) {
+                setLcdStatusMode(3);
+            } else {
+                if (getLcdStatusMode() != 0) {
+                    renderScanline(currentLy);
+                }
+                setLcdStatusMode(0);
+                checkStatInterrupt(0);
+            }
+        }
+    }
 
-            int address;
-            if (unsignedMode) {
-                address = 0x8000 + (tileIndex * 16) + ((pixelY % 8) * 2);
+    private void checkCoincidenceFlag(int currentLy) {
+        int lyc = mmu.readByte(0xFF45);
+        int stat = mmu.readByte(0xFF41);
+
+        if (currentLy == lyc) {
+            stat |= 0x04;
+            if ((stat & 0x40) != 0) {
+                triggerStatInterrupt();
+            }
+        } else {
+            stat &= ~0x04;
+        }
+
+        mmu.writeByte(0xFF41, stat);
+    }
+
+    private void checkStatInterrupt(int mode) {
+        int stat = mmu.readByte(0xFF41);
+        boolean trigger = false;
+
+        if (mode == 0 && (stat & 0x08) != 0) trigger = true;
+        if (mode == 1 && (stat & 0x10) != 0) trigger = true;
+        if (mode == 2 && (stat & 0x20) != 0) trigger = true;
+
+        if (trigger) {
+            triggerStatInterrupt();
+        }
+    }
+
+    private void triggerStatInterrupt() {
+        int ifReg = mmu.readByte(0xFF0F);
+        mmu.writeByte(0xFF0F, ifReg | 0x02);
+    }
+
+    private void renderScanline(int scanline) {
+        int lcdc = mmu.readByte(0xFF40);
+
+        if ((lcdc & 0x01) != 0) {
+            renderBackgroundScanline(scanline, lcdc);
+        }
+
+        if ((lcdc & 0x20) != 0) {
+            renderWindowScanline(scanline, lcdc);
+        }
+
+        if ((lcdc & 0x02) != 0) {
+            renderSpritesScanline(scanline, lcdc);
+        }
+    }
+
+    private void renderBackgroundScanline(int scanline, int lcdc) {
+        int scx = mmu.readByte(0xFF42);
+        int scy = mmu.readByte(0xFF43);
+        int bgp = mmu.readByte(0xFF47);
+
+        int tileMapAddress = ((lcdc & 0x08) != 0) ? 0x9C00 : 0x9800;
+        int tileDataAddress = ((lcdc & 0x10) != 0) ? 0x8000 : 0x8800;
+        boolean isUnsigned = (lcdc & 0x10) != 0;
+
+        int yPos = (scanline + scy) & 0xFF;
+        int tileRow = yPos / 8;
+
+        for (int x = 0; x < 160; x++) {
+            int xPos = (x + scx) & 0xFF;
+            int tileCol = xPos / 8;
+
+            int tileIndexAddress = tileMapAddress + (tileRow * 32) + tileCol;
+            int tileIndex = mmu.readByte(tileIndexAddress);
+
+            int tileAddress;
+            if (isUnsigned) {
+                tileAddress = tileDataAddress + (tileIndex * 16);
             } else {
                 byte signedIndex = (byte) tileIndex;
-                address = 0x9000 + (signedIndex * 16) + ((pixelY % 8) * 2);
+                tileAddress = 0x9000 + (signedIndex * 16);
             }
 
-            int byte1 = mmu.readByte(address);
-            int byte2 = mmu.readByte(address + 1);
+            int lineInTile = (yPos % 8) * 2;
+            int byte1 = mmu.readByte(tileAddress + lineInTile);
+            int byte2 = mmu.readByte(tileAddress + lineInTile + 1);
 
-            int bit = 7 - (pixelX % 8);
-            int pixelColorNum = (((byte2 >> bit) & 0x01) << 1) | ((byte1 >> bit) & 0x01);
-            int colorIndex = (bgp >> (pixelColorNum * 2)) & 0x03;
+            int bitIndex = 7 - (xPos % 8);
+            int pixelColorId = (((byte2 >> bitIndex) & 1) << 1) | ((byte1 >> bitIndex) & 1);
 
-            frameBuffer[line * Display.WIDTH + x] = PALETTE[colorIndex];
+            int colorNum = (bgp >> (pixelColorId * 2)) & 0x03;
+            screenBuffer[scanline * 160 + x] = PALETTE_COLORS[colorNum];
         }
+    }
+
+    private void renderWindowScanline(int scanline, int lcdc) {
+        int wx = mmu.readByte(0xFF4B) - 7;
+        int wy = mmu.readByte(0xFF4A);
+
+        if (scanline < wy || wx >= 160) {
+            return;
+        }
+
+        int bgp = mmu.readByte(0xFF47);
+        int tileMapAddress = ((lcdc & 0x40) != 0) ? 0x9C00 : 0x9800;
+        int tileDataAddress = ((lcdc & 0x10) != 0) ? 0x8000 : 0x8800;
+        boolean isUnsigned = (lcdc & 0x10) != 0;
+
+        int yPos = scanline - wy;
+        int tileRow = yPos / 8;
+
+        for (int x = Math.max(0, wx); x < 160; x++) {
+            int xPos = x - wx;
+            int tileCol = xPos / 8;
+
+            int tileIndexAddress = tileMapAddress + (tileRow * 32) + tileCol;
+            int tileIndex = mmu.readByte(tileIndexAddress);
+
+            int tileAddress;
+            if (isUnsigned) {
+                tileAddress = tileDataAddress + (tileIndex * 16);
+            } else {
+                byte signedIndex = (byte) tileIndex;
+                tileAddress = 0x9000 + (signedIndex * 16);
+            }
+
+            int lineInTile = (yPos % 8) * 2;
+            int byte1 = mmu.readByte(tileAddress + lineInTile);
+            int byte2 = mmu.readByte(tileAddress + lineInTile + 1);
+
+            int bitIndex = 7 - (xPos % 8);
+            int pixelColorId = (((byte2 >> bitIndex) & 1) << 1) | ((byte1 >> bitIndex) & 1);
+
+            int colorNum = (bgp >> (pixelColorId * 2)) & 0x03;
+            screenBuffer[scanline * 160 + x] = PALETTE_COLORS[colorNum];
+        }
+    }
+
+    private void renderSpritesScanline(int scanline, int lcdc) {
+        boolean use8x16 = (lcdc & 0x04) != 0;
+        int spriteHeight = use8x16 ? 16 : 8;
+
+        int spritesDrawn = 0;
+
+        for (int i = 0; i < 40; i++) {
+            int oamAddress = 0xFE00 + (i * 4);
+            int yPos = mmu.readByte(oamAddress) - 16;
+            int xPos = mmu.readByte(oamAddress + 1) - 8;
+            int tileIndex = mmu.readByte(oamAddress + 2);
+            int attributes = mmu.readByte(oamAddress + 3);
+
+            if (scanline < yPos || scanline >= (yPos + spriteHeight)) {
+                continue;
+            }
+
+            spritesDrawn++;
+            if (spritesDrawn > 10) {
+                break;
+            }
+
+            if (xPos < -7 || xPos >= 160) {
+                continue;
+            }
+
+            boolean priority = (attributes & 0x80) != 0;
+            boolean yFlip = (attributes & 0x40) != 0;
+            boolean xFlip = (attributes & 0x20) != 0;
+            int paletteAddress = (attributes & 0x10) != 0 ? 0xFF49 : 0xFF48;
+            int obp = mmu.readByte(paletteAddress);
+
+            int lineInSprite = scanline - yPos;
+            if (yFlip) {
+                lineInSprite = spriteHeight - 1 - lineInSprite;
+            }
+
+            if (use8x16) {
+                tileIndex &= 0xFE;
+            }
+
+            int tileAddress = 0x8000 + (tileIndex * 16) + (lineInSprite * 2);
+            int byte1 = mmu.readByte(tileAddress);
+            int byte2 = mmu.readByte(tileAddress + 1);
+
+            for (int col = 0; col < 8; col++) {
+                int pixelX = xPos + col;
+                if (pixelX < 0 || pixelX >= 160) {
+                    continue;
+                }
+
+                int bitIndex = xFlip ? col : (7 - col);
+                int pixelColorId = (((byte2 >> bitIndex) & 1) << 1) | ((byte1 >> bitIndex) & 1);
+
+                if (pixelColorId == 0) {
+                    continue;
+                }
+
+                if (priority && screenBuffer[scanline * 160 + pixelX] != PALETTE_COLORS[0]) {
+                    continue;
+                }
+
+                int colorNum = (obp >> (pixelColorId * 2)) & 0x03;
+                screenBuffer[scanline * 160 + pixelX] = PALETTE_COLORS[colorNum];
+            }
+        }
+    }
+
+    private void setLcdStatusMode(int mode) {
+        int stat = mmu.readByte(0xFF41);
+        mmu.writeByte(0xFF41, (stat & ~0x03) | (mode & 0x03));
+    }
+
+    private int getLcdStatusMode() {
+        return mmu.readByte(0xFF41) & 0x03;
+    }
+
+    public int[] getScreenBuffer() {
+        return screenBuffer;
     }
 }
