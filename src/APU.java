@@ -75,20 +75,19 @@ public class APU {
 
     private void generateAndSendSample() {
         if (audioLine == null || !audioLine.isOpen()) return;
-
-        // Evita bloqueio na escrita se o buffer da placa de som estiver cheio
         if (audioLine.available() < 128) return;
 
         int nr11 = mmu.readByte(0xFF11);
         int dutyType = (nr11 >> 6) & 0x03;
-
         int sample = 0;
+
         if (ch1Enabled) {
             int bit = DUTY_PATTERNS[dutyType][ch1DutyIndex];
-            sample = bit * ch1Volume * 8;
+            sample = bit * ch1Volume * 4;
         }
 
-        byte[] buffer = new byte[]{(byte) (sample & 0xFF)};
+        byte sampleByte = (byte) (sample & 0xFF);
+        byte[] buffer = new byte[]{ sampleByte };
         audioLine.write(buffer, 0, 1);
     }
 }

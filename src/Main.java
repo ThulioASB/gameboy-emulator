@@ -8,7 +8,7 @@ import javax.swing.SwingUtilities;
 public class Main {
     public static void main(String[] args) {
         if (args.length < 1) {
-            System.out.println("Uso: java Main <caminho_da_rom.gb>");
+            System.out.println("Uso: java Main <roms/tetris.gb>");
             return;
         }
 
@@ -68,6 +68,8 @@ public class Main {
                                 cyclesThisFrame += tCycles;
                             }
 
+                            System.out.println("PC Atual: 0x" + Integer.toHexString(reg.pc));
+                            
                             window.renderFrame(ppu.getScreenBuffer());
 
                             saveTimer++;

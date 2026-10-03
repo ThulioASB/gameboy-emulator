@@ -26,7 +26,7 @@ public class PPU {
         }
 
         cycleCounter += tCycles;
-        int currentLy = mmu.readByte(0xFF44);
+        int currentLy = mmu.readByteDirectly(0xFF44);
 
         if (cycleCounter >= 456) {
             cycleCounter -= 456;
@@ -38,7 +38,6 @@ public class PPU {
             if (currentLy == 144) {
                 int ifReg = mmu.readByte(0xFF0F);
                 mmu.writeByte(0xFF0F, ifReg | 0x01);
-
                 checkStatInterrupt(1);
             }
         }
@@ -46,24 +45,27 @@ public class PPU {
         if (currentLy >= 144) {
             setLcdStatusMode(1);
         } else {
+            int currentMode = getLcdStatusMode();
             if (cycleCounter < 80) {
-                setLcdStatusMode(2);
-                checkStatInterrupt(2);
+                if (currentMode != 2) {
+                    setLcdStatusMode(2);
+                    checkStatInterrupt(2);
+                }
             } else if (cycleCounter < 80 + 172) {
                 setLcdStatusMode(3);
             } else {
-                if (getLcdStatusMode() != 0) {
+                if (currentMode != 0) {
                     renderScanline(currentLy);
+                    setLcdStatusMode(0);
+                    checkStatInterrupt(0);
                 }
-                setLcdStatusMode(0);
-                checkStatInterrupt(0);
             }
         }
     }
 
     private void checkCoincidenceFlag(int currentLy) {
-        int lyc = mmu.readByte(0xFF45);
-        int stat = mmu.readByte(0xFF41);
+        int lyc = mmu.readByteDirectly(0xFF45);
+        int stat = mmu.readByteDirectly(0xFF41);
 
         if (currentLy == lyc) {
             stat |= 0x04;
@@ -74,7 +76,7 @@ public class PPU {
             stat &= ~0x04;
         }
 
-        mmu.writeByte(0xFF41, stat);
+        mmu.setStatDirectly(stat);
     }
 
     private void checkStatInterrupt(int mode) {
@@ -97,24 +99,24 @@ public class PPU {
 
     private void renderScanline(int scanline) {
         int lcdc = mmu.readByte(0xFF40);
-
+        
         if ((lcdc & 0x01) != 0) {
             renderBackgroundScanline(scanline, lcdc);
         }
-
+        
         if ((lcdc & 0x20) != 0) {
             renderWindowScanline(scanline, lcdc);
         }
-
+        
         if ((lcdc & 0x02) != 0) {
             renderSpritesScanline(scanline, lcdc);
         }
     }
 
     private void renderBackgroundScanline(int scanline, int lcdc) {
-        int scx = mmu.readByte(0xFF42);
-        int scy = mmu.readByte(0xFF43);
-        int bgp = mmu.readByte(0xFF47);
+        int scx = mmu.readByteDirectly(0xFF42);
+        int scy = mmu.readByteDirectly(0xFF43);
+        int bgp = mmu.readByteDirectly(0xFF47);
 
         int tileMapAddress = ((lcdc & 0x08) != 0) ? 0x9C00 : 0x9800;
         int tileDataAddress = ((lcdc & 0x10) != 0) ? 0x8000 : 0x8800;
@@ -128,7 +130,7 @@ public class PPU {
             int tileCol = xPos / 8;
 
             int tileIndexAddress = tileMapAddress + (tileRow * 32) + tileCol;
-            int tileIndex = mmu.readByte(tileIndexAddress);
+            int tileIndex = mmu.readByteDirectly(tileIndexAddress);
 
             int tileAddress;
             if (isUnsigned) {
@@ -139,8 +141,8 @@ public class PPU {
             }
 
             int lineInTile = (yPos % 8) * 2;
-            int byte1 = mmu.readByte(tileAddress + lineInTile);
-            int byte2 = mmu.readByte(tileAddress + lineInTile + 1);
+            int byte1 = mmu.readByteDirectly(tileAddress + lineInTile);
+            int byte2 = mmu.readByteDirectly(tileAddress + lineInTile + 1);
 
             int bitIndex = 7 - (xPos % 8);
             int pixelColorId = (((byte2 >> bitIndex) & 1) << 1) | ((byte1 >> bitIndex) & 1);
@@ -151,14 +153,14 @@ public class PPU {
     }
 
     private void renderWindowScanline(int scanline, int lcdc) {
-        int wx = mmu.readByte(0xFF4B) - 7;
-        int wy = mmu.readByte(0xFF4A);
+        int wx = mmu.readByteDirectly(0xFF4B) - 7;
+        int wy = mmu.readByteDirectly(0xFF4A);
 
         if (scanline < wy || wx >= 160) {
             return;
         }
 
-        int bgp = mmu.readByte(0xFF47);
+        int bgp = mmu.readByteDirectly(0xFF47);
         int tileMapAddress = ((lcdc & 0x40) != 0) ? 0x9C00 : 0x9800;
         int tileDataAddress = ((lcdc & 0x10) != 0) ? 0x8000 : 0x8800;
         boolean isUnsigned = (lcdc & 0x10) != 0;
@@ -171,7 +173,7 @@ public class PPU {
             int tileCol = xPos / 8;
 
             int tileIndexAddress = tileMapAddress + (tileRow * 32) + tileCol;
-            int tileIndex = mmu.readByte(tileIndexAddress);
+            int tileIndex = mmu.readByteDirectly(tileIndexAddress);
 
             int tileAddress;
             if (isUnsigned) {
@@ -182,8 +184,8 @@ public class PPU {
             }
 
             int lineInTile = (yPos % 8) * 2;
-            int byte1 = mmu.readByte(tileAddress + lineInTile);
-            int byte2 = mmu.readByte(tileAddress + lineInTile + 1);
+            int byte1 = mmu.readByteDirectly(tileAddress + lineInTile);
+            int byte2 = mmu.readByteDirectly(tileAddress + lineInTile + 1);
 
             int bitIndex = 7 - (xPos % 8);
             int pixelColorId = (((byte2 >> bitIndex) & 1) << 1) | ((byte1 >> bitIndex) & 1);
@@ -201,10 +203,10 @@ public class PPU {
 
         for (int i = 0; i < 40; i++) {
             int oamAddress = 0xFE00 + (i * 4);
-            int yPos = mmu.readByte(oamAddress) - 16;
-            int xPos = mmu.readByte(oamAddress + 1) - 8;
-            int tileIndex = mmu.readByte(oamAddress + 2);
-            int attributes = mmu.readByte(oamAddress + 3);
+            int yPos = mmu.readByteDirectly(oamAddress) - 16;
+            int xPos = mmu.readByteDirectly(oamAddress + 1) - 8;
+            int tileIndex = mmu.readByteDirectly(oamAddress + 2);
+            int attributes = mmu.readByteDirectly(oamAddress + 3);
 
             if (scanline < yPos || scanline >= (yPos + spriteHeight)) {
                 continue;
@@ -223,7 +225,7 @@ public class PPU {
             boolean yFlip = (attributes & 0x40) != 0;
             boolean xFlip = (attributes & 0x20) != 0;
             int paletteAddress = (attributes & 0x10) != 0 ? 0xFF49 : 0xFF48;
-            int obp = mmu.readByte(paletteAddress);
+            int obp = mmu.readByteDirectly(paletteAddress);
 
             int lineInSprite = scanline - yPos;
             if (yFlip) {
@@ -235,8 +237,8 @@ public class PPU {
             }
 
             int tileAddress = 0x8000 + (tileIndex * 16) + (lineInSprite * 2);
-            int byte1 = mmu.readByte(tileAddress);
-            int byte2 = mmu.readByte(tileAddress + 1);
+            int byte1 = mmu.readByteDirectly(tileAddress);
+            int byte2 = mmu.readByteDirectly(tileAddress + 1);
 
             for (int col = 0; col < 8; col++) {
                 int pixelX = xPos + col;
@@ -262,12 +264,12 @@ public class PPU {
     }
 
     private void setLcdStatusMode(int mode) {
-        int stat = mmu.readByte(0xFF41);
-        mmu.writeByte(0xFF41, (stat & ~0x03) | (mode & 0x03));
+        int stat = mmu.readByteDirectly(0xFF41);
+        mmu.setStatDirectly((stat & ~0x03) | (mode & 0x03));
     }
 
     private int getLcdStatusMode() {
-        return mmu.readByte(0xFF41) & 0x03;
+        return mmu.readByteDirectly(0xFF41) & 0x03;
     }
 
     public int[] getScreenBuffer() {

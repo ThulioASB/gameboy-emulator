@@ -3,6 +3,7 @@ public class CPU {
     private final MMU mmu;
     private final ALU alu;
     private boolean ime = false;
+    private boolean pendingIme = false;
     private boolean halted = false;
 
     public CPU(Registers reg, MMU mmu) {
@@ -56,11 +57,15 @@ public class CPU {
 
         if (pending == 0) return 0;
 
-        if (halted) halted = false;
-        if (!ime) return 0;
+        if (halted) {
+            halted = false;
+        }
+
+        if (!ime) {
+            return 0;
+        }
 
         ime = false;
-
         for (int bit = 0; bit < 5; bit++) {
             if ((pending & (1 << bit)) != 0) {
                 mmu.writeByte(0xFF0F, ifReg & ~(1 << bit));
@@ -73,6 +78,11 @@ public class CPU {
     }
 
     public int step() {
+        if (pendingIme) {
+            ime = true;
+            pendingIme = false;
+        }
+
         int interruptCycles = handleInterrupts();
         if (interruptCycles > 0) return interruptCycles;
 
@@ -226,7 +236,10 @@ public class CPU {
             case 0x73 -> { mmu.writeByte(reg.getHL(), reg.e); return 2; }
             case 0x74 -> { mmu.writeByte(reg.getHL(), reg.h); return 2; }
             case 0x75 -> { mmu.writeByte(reg.getHL(), reg.l); return 2; }
-            case 0x76 -> { halted = true; return 1; }
+            case 0x76 -> {
+                halted = true;
+                return 1;
+            }
             case 0x77 -> { mmu.writeByte(reg.getHL(), reg.a); return 2; }
             case 0x78 -> { reg.a = reg.b; return 1; }
             case 0x79 -> { reg.a = reg.c; return 1; }
@@ -365,7 +378,7 @@ public class CPU {
             }
             case 0xF9 -> { reg.sp = reg.getHL(); return 2; }
             case 0xFA -> { reg.a = mmu.readByte(fetchWord()); return 4; }
-            case 0xFB -> { ime = true; return 1; }
+            case 0xFB -> { pendingIme = true; return 1; }
             case 0xFE -> { alu.sub8(reg.a, fetchByte(), false); return 2; }
             case 0xFF -> { pushWord(reg.pc); reg.pc = 0x0038; return 4; }
 

@@ -9,6 +9,7 @@ public class MMU {
         memory[0xFF05] = 0x00;
         memory[0xFF06] = 0x00;
         memory[0xFF07] = 0x00;
+        memory[0xFF0F] = 0xE1;
         memory[0xFF10] = 0x80;
         memory[0xFF11] = 0xBF;
         memory[0xFF12] = 0xF3;
@@ -17,9 +18,11 @@ public class MMU {
         memory[0xFF25] = 0xF3;
         memory[0xFF26] = 0xF1;
         memory[0xFF40] = 0x91;
+        memory[0xFF44] = 0x00;
         memory[0xFF47] = 0xFC;
         memory[0xFF48] = 0xFF;
         memory[0xFF49] = 0xFF;
+        memory[0xFFFF] = 0x01;
     }
 
     public void setJoypad(Joypad joypad) {
@@ -49,8 +52,16 @@ public class MMU {
             return joypad.getState();
         }
 
+        if (address >= 0xFF00 && address <= 0xFF7F) {
+            return memory[address] & 0xFF;
+        }
+
         if (address <= 0x7FFF || (address >= 0xA000 && address <= 0xBFFF)) {
             return (mbc != null) ? mbc.readByte(address) : memory[address] & 0xFF;
+        }
+
+        if (address == 0xFF0F) {
+            return memory[0xFF0F] | 0xE0;
         }
 
         return memory[address] & 0xFF;
@@ -87,6 +98,11 @@ public class MMU {
             return;
         }
 
+        if (address == 0xFF0F) {
+            memory[0xFF0F] = value & 0x1F;
+            return;
+        }
+
         memory[address] = value;
     }
 
@@ -108,5 +124,9 @@ public class MMU {
 
     public void setLyDirectly(int value) {
         memory[0xFF44] = value & 0xFF;
+    }
+
+    public void setStatDirectly(int value) {
+        memory[0xFF41] = value & 0xFF;
     }
 }
