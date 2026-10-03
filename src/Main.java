@@ -28,6 +28,7 @@ public class Main {
                 APU apu = new APU(mmu);
 
                 mmu.setTimer(timer);
+                mmu.setApu(apu);
 
                 byte[] romData = Files.readAllBytes(Path.of(romPath));
                 mmu.loadRom(romData);
@@ -41,6 +42,7 @@ public class Main {
                     @Override
                     public void windowClosing(WindowEvent e) {
                         saveManager.save();
+                        apu.close();
                     }
                 });
 
@@ -68,8 +70,6 @@ public class Main {
                                 cyclesThisFrame += tCycles;
                             }
 
-                            System.out.println("PC Atual: 0x" + Integer.toHexString(reg.pc));
-                            
                             window.renderFrame(ppu.getScreenBuffer());
 
                             saveTimer++;

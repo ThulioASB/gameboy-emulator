@@ -3,8 +3,9 @@ public class CPU {
     private final MMU mmu;
     private final ALU alu;
     private boolean ime = false;
-    private boolean pendingIme = false;
+    private int imeEnableDelay = 0;
     private boolean halted = false;
+    private boolean haltBug = false;
 
     public CPU(Registers reg, MMU mmu) {
         this.reg = reg;
@@ -66,6 +67,7 @@ public class CPU {
         }
 
         ime = false;
+        imeEnableDelay = 0;
         for (int bit = 0; bit < 5; bit++) {
             if ((pending & (1 << bit)) != 0) {
                 mmu.writeByte(0xFF0F, ifReg & ~(1 << bit));
@@ -78,9 +80,11 @@ public class CPU {
     }
 
     public int step() {
-        if (pendingIme) {
-            ime = true;
-            pendingIme = false;
+        if (imeEnableDelay > 0) {
+            imeEnableDelay--;
+            if (imeEnableDelay == 0) {
+                ime = true;
+            }
         }
 
         int interruptCycles = handleInterrupts();
@@ -88,7 +92,13 @@ public class CPU {
 
         if (halted) return 1;
 
-        int opcode = fetchByte();
+        int opcode;
+        if (haltBug) {
+            opcode = mmu.readByte(reg.pc);
+            haltBug = false;
+        } else {
+            opcode = fetchByte();
+        }
 
         switch (opcode) {
             case 0x00 -> { return 1; }
@@ -117,12 +127,20 @@ public class CPU {
                 reg.setZero(false); reg.setSubtract(false); reg.setHalfCarry(false); reg.setCarry(c == 1);
                 return 1;
             }
+            case 0x10 -> { fetchByte(); return 2; }
             case 0x11 -> { reg.setDE(fetchWord()); return 3; }
             case 0x12 -> { mmu.writeByte(reg.getDE(), reg.a); return 2; }
             case 0x13 -> { reg.setDE((reg.getDE() + 1) & 0xFFFF); return 2; }
             case 0x14 -> { reg.d = alu.inc8(reg.d); return 1; }
             case 0x15 -> { reg.d = alu.dec8(reg.d); return 1; }
             case 0x16 -> { reg.d = fetchByte(); return 2; }
+            case 0x17 -> {
+                int carryIn = reg.isCarry() ? 1 : 0;
+                int newCarry = (reg.a >> 7) & 1;
+                reg.a = ((reg.a << 1) & 0xFF) | carryIn;
+                reg.setZero(false); reg.setSubtract(false); reg.setHalfCarry(false); reg.setCarry(newCarry == 1);
+                return 1;
+            }
             case 0x18 -> { byte offset = (byte) fetchByte(); reg.pc = (reg.pc + offset) & 0xFFFF; return 3; }
             case 0x19 -> { reg.setHL(alu.add16(reg.getHL(), reg.getDE())); return 2; }
             case 0x1A -> { reg.a = mmu.readByte(reg.getDE()); return 2; }
@@ -130,6 +148,13 @@ public class CPU {
             case 0x1C -> { reg.e = alu.inc8(reg.e); return 1; }
             case 0x1D -> { reg.e = alu.dec8(reg.e); return 1; }
             case 0x1E -> { reg.e = fetchByte(); return 2; }
+            case 0x1F -> {
+                int carryIn = reg.isCarry() ? 1 : 0;
+                int newCarry = reg.a & 1;
+                reg.a = ((reg.a >>> 1) | (carryIn << 7)) & 0xFF;
+                reg.setZero(false); reg.setSubtract(false); reg.setHalfCarry(false); reg.setCarry(newCarry == 1);
+                return 1;
+            }
             case 0x20 -> {
                 byte offset = (byte) fetchByte();
                 if (!reg.isZero()) { reg.pc = (reg.pc + offset) & 0xFFFF; return 3; }
@@ -237,7 +262,12 @@ public class CPU {
             case 0x74 -> { mmu.writeByte(reg.getHL(), reg.h); return 2; }
             case 0x75 -> { mmu.writeByte(reg.getHL(), reg.l); return 2; }
             case 0x76 -> {
-                halted = true;
+                int pending = mmu.readByte(0xFF0F) & mmu.readByte(0xFFFF) & 0x1F;
+                if (!ime && pending != 0) {
+                    haltBug = true;
+                } else {
+                    halted = true;
+                }
                 return 1;
             }
             case 0x77 -> { mmu.writeByte(reg.getHL(), reg.a); return 2; }
@@ -343,7 +373,7 @@ public class CPU {
             case 0xD6 -> { reg.a = alu.sub8(reg.a, fetchByte(), false); return 2; }
             case 0xD7 -> { pushWord(reg.pc); reg.pc = 0x0010; return 4; }
             case 0xD8 -> { if (reg.isCarry()) { reg.pc = popWord(); return 5; } return 2; }
-            case 0xD9 -> { reg.pc = popWord(); ime = true; return 4; }
+            case 0xD9 -> { reg.pc = popWord(); ime = true; imeEnableDelay = 0; return 4; }
             case 0xDA -> { int addr = fetchWord(); if (reg.isCarry()) { reg.pc = addr; return 4; } return 3; }
             case 0xDC -> { int addr = fetchWord(); if (reg.isCarry()) { pushWord(reg.pc); reg.pc = addr; return 6; } return 3; }
             case 0xDE -> { reg.a = alu.sub8(reg.a, fetchByte(), true); return 2; }
@@ -355,6 +385,17 @@ public class CPU {
             case 0xE5 -> { pushWord(reg.getHL()); return 4; }
             case 0xE6 -> { reg.a = alu.and8(reg.a, fetchByte()); return 2; }
             case 0xE7 -> { pushWord(reg.pc); reg.pc = 0x0020; return 4; }
+            case 0xE8 -> {
+                int imm = (byte) fetchByte();
+                int previousSp = reg.sp;
+                int result = previousSp + imm;
+                reg.setZero(false);
+                reg.setSubtract(false);
+                reg.setHalfCarry(((previousSp & 0x0F) + (imm & 0x0F)) > 0x0F);
+                reg.setCarry(((previousSp & 0xFF) + (imm & 0xFF)) > 0xFF);
+                reg.sp = result & 0xFFFF;
+                return 4;
+            }
             case 0xE9 -> { reg.pc = reg.getHL(); return 1; }
             case 0xEA -> { mmu.writeByte(fetchWord(), reg.a); return 4; }
             case 0xEE -> { reg.a = alu.xor8(reg.a, fetchByte()); return 2; }
@@ -363,7 +404,7 @@ public class CPU {
             case 0xF0 -> { reg.a = mmu.readByte(0xFF00 + fetchByte()); return 3; }
             case 0xF1 -> { reg.setAF(popWord()); return 3; }
             case 0xF2 -> { reg.a = mmu.readByte(0xFF00 + reg.c); return 2; }
-            case 0xF3 -> { ime = false; return 1; }
+            case 0xF3 -> { ime = false; imeEnableDelay = 0; return 1; }
             case 0xF5 -> { pushWord(reg.getAF()); return 4; }
             case 0xF6 -> { reg.a = alu.or8(reg.a, fetchByte()); return 2; }
             case 0xF7 -> { pushWord(reg.pc); reg.pc = 0x0030; return 4; }
@@ -378,7 +419,12 @@ public class CPU {
             }
             case 0xF9 -> { reg.sp = reg.getHL(); return 2; }
             case 0xFA -> { reg.a = mmu.readByte(fetchWord()); return 4; }
-            case 0xFB -> { pendingIme = true; return 1; }
+            case 0xFB -> {
+                if (!ime && imeEnableDelay == 0) {
+                    imeEnableDelay = 2;
+                }
+                return 1;
+            }
             case 0xFE -> { alu.sub8(reg.a, fetchByte(), false); return 2; }
             case 0xFF -> { pushWord(reg.pc); reg.pc = 0x0038; return 4; }
 
@@ -393,32 +439,101 @@ public class CPU {
 
         int val = getRegByIndex(regIndex);
 
-        if (cbOpcode >= 0x40 && cbOpcode <= 0x7F) {
+        if ((cbOpcode & 0xC0) == 0x40) {
             boolean isBitSet = (val & (1 << bitIndex)) != 0;
             reg.setZero(!isBitSet);
             reg.setSubtract(false);
             reg.setHalfCarry(true);
             return (regIndex == 6) ? 3 : 2;
-        } else if (cbOpcode >= 0x80 && cbOpcode <= 0xBF) {
+        }
+
+        if ((cbOpcode & 0xC0) == 0x80) {
             val &= ~(1 << bitIndex);
             setRegByIndex(regIndex, val);
             return (regIndex == 6) ? 4 : 2;
-        } else if (cbOpcode >= 0xC0 && cbOpcode <= 0xFF) {
+        }
+
+        if ((cbOpcode & 0xC0) == 0xC0) {
             val |= (1 << bitIndex);
             setRegByIndex(regIndex, val);
             return (regIndex == 6) ? 4 : 2;
         }
 
+        int result;
+        int carryOut;
         switch (cbOpcode & 0xF8) {
-            case 0x30 -> {
-                int high = (val & 0xF0) >> 4;
-                int low = (val & 0x0F) << 4;
-                val = low | high;
-                reg.setZero(val == 0); reg.setSubtract(false); reg.setHalfCarry(false); reg.setCarry(false);
+            case 0x00 -> { // RLC
+                carryOut = (val >> 7) & 0x01;
+                result = ((val << 1) & 0xFF) | carryOut;
+                reg.setCarry(carryOut == 1);
+                reg.setZero(result == 0);
+                reg.setSubtract(false);
+                reg.setHalfCarry(false);
+            }
+            case 0x08 -> { // RRC
+                carryOut = val & 0x01;
+                result = ((val >>> 1) | (carryOut << 7)) & 0xFF;
+                reg.setCarry(carryOut == 1);
+                reg.setZero(result == 0);
+                reg.setSubtract(false);
+                reg.setHalfCarry(false);
+            }
+            case 0x10 -> { // RL
+                int rotateIn = reg.isCarry() ? 1 : 0;
+                carryOut = (val >> 7) & 0x01;
+                result = ((val << 1) & 0xFF) | rotateIn;
+                reg.setCarry(carryOut == 1);
+                reg.setZero(result == 0);
+                reg.setSubtract(false);
+                reg.setHalfCarry(false);
+            }
+            case 0x18 -> { // RR
+                carryOut = reg.isCarry() ? 1 : 0;
+                int oldCarry = val & 0x01;
+                result = ((val >>> 1) | (carryOut << 7)) & 0xFF;
+                reg.setCarry(oldCarry == 1);
+                reg.setZero(result == 0);
+                reg.setSubtract(false);
+                reg.setHalfCarry(false);
+            }
+            case 0x20 -> { // SLA
+                carryOut = (val >> 7) & 0x01;
+                result = (val << 1) & 0xFF;
+                reg.setCarry(carryOut == 1);
+                reg.setZero(result == 0);
+                reg.setSubtract(false);
+                reg.setHalfCarry(false);
+            }
+            case 0x28 -> { // SRA
+                carryOut = val & 0x01;
+                result = ((val >> 1) | (val & 0x80)) & 0xFF;
+                reg.setCarry(carryOut == 1);
+                reg.setZero(result == 0);
+                reg.setSubtract(false);
+                reg.setHalfCarry(false);
+            }
+            case 0x30 -> { // SWAP
+                result = ((val & 0x0F) << 4) | ((val & 0xF0) >>> 4);
+                reg.setCarry(false);
+                reg.setZero(result == 0);
+                reg.setSubtract(false);
+                reg.setHalfCarry(false);
+            }
+            case 0x38 -> { // SRL
+                carryOut = val & 0x01;
+                result = (val >>> 1) & 0xFF;
+                reg.setCarry(carryOut == 1);
+                reg.setZero(result == 0);
+                reg.setSubtract(false);
+                reg.setHalfCarry(false);
+            }
+            default -> {
+                setRegByIndex(regIndex, val);
+                return (regIndex == 6) ? 4 : 2;
             }
         }
 
-        setRegByIndex(regIndex, val);
+        setRegByIndex(regIndex, result);
         return (regIndex == 6) ? 4 : 2;
     }
 

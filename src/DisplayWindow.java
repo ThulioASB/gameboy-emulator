@@ -11,6 +11,7 @@ public class DisplayWindow extends JFrame {
 
     private final BufferedImage image;
     private final JPanel canvasPanel;
+    private volatile int[] latestFrame;
 
     public DisplayWindow(String title, Joypad joypad) {
         super(title);
@@ -21,10 +22,28 @@ public class DisplayWindow extends JFrame {
             @Override
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
-                g.drawImage(image, 0, 0, WIDTH * SCALE, HEIGHT * SCALE, null);
+                int[] frame = latestFrame;
+                if (frame != null) {
+                    image.setRGB(
+                        0, 0,
+                        DisplayWindow.WIDTH, DisplayWindow.HEIGHT,
+                        frame, 0, DisplayWindow.WIDTH
+                    );
+                }
+                ((Graphics2D) g).setRenderingHint(
+                    RenderingHints.KEY_INTERPOLATION,
+                    RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+                );
+                g.drawImage(
+                    image, 0, 0,
+                    DisplayWindow.WIDTH * DisplayWindow.SCALE,
+                    DisplayWindow.HEIGHT * DisplayWindow.SCALE,
+                    null
+                );
             }
         };
 
+        canvasPanel.setBackground(new Color(0xE0F8D0));
         canvasPanel.setPreferredSize(new Dimension(WIDTH * SCALE, HEIGHT * SCALE));
         this.add(canvasPanel);
         this.pack();
@@ -46,7 +65,7 @@ public class DisplayWindow extends JFrame {
     }
 
     public void renderFrame(int[] screenBuffer) {
-        image.setRGB(0, 0, WIDTH, HEIGHT, screenBuffer, 0, WIDTH);
+        latestFrame = screenBuffer.clone();
         canvasPanel.repaint();
     }
 }

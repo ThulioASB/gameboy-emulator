@@ -3,6 +3,7 @@ public class MMU {
     private MBC mbc;
     private Timer timer;
     private Joypad joypad;
+    private APU apu;
 
     public MMU() {
         memory[0xFF00] = 0xCF;
@@ -22,7 +23,7 @@ public class MMU {
         memory[0xFF47] = 0xFC;
         memory[0xFF48] = 0xFF;
         memory[0xFF49] = 0xFF;
-        memory[0xFFFF] = 0x01;
+        memory[0xFFFF] = 0x00;
     }
 
     public void setJoypad(Joypad joypad) {
@@ -41,6 +42,10 @@ public class MMU {
         this.timer = timer;
     }
 
+    public void setApu(APU apu) {
+        this.apu = apu;
+    }
+
     public int readByteDirectly(int address) {
         return memory[address & 0xFFFF] & 0xFF;
     }
@@ -52,16 +57,16 @@ public class MMU {
             return joypad.getState();
         }
 
+        if (address == 0xFF0F) {
+            return memory[0xFF0F] | 0xE0;
+        }
+
         if (address >= 0xFF00 && address <= 0xFF7F) {
             return memory[address] & 0xFF;
         }
 
         if (address <= 0x7FFF || (address >= 0xA000 && address <= 0xBFFF)) {
             return (mbc != null) ? mbc.readByte(address) : memory[address] & 0xFF;
-        }
-
-        if (address == 0xFF0F) {
-            return memory[0xFF0F] | 0xE0;
         }
 
         return memory[address] & 0xFF;
@@ -88,7 +93,6 @@ public class MMU {
         }
 
         if (address == 0xFF44) {
-            memory[0xFF44] = 0;
             return;
         }
 
@@ -103,7 +107,24 @@ public class MMU {
             return;
         }
 
+        if (address == 0xFF02) {
+            memory[address] = value;
+            if ((value & 0x81) == 0x81) {
+                System.out.print((char) memory[0xFF01]);
+                if (memory[0xFF01] == '\n') {
+                    System.out.flush();
+                }
+                memory[address] = value & 0x7F;
+                memory[0xFF0F] |= 0x08;
+            }
+            return;
+        }
+
         memory[address] = value;
+        if (apu != null) {
+            apu.writeLengthRegister(address, value);
+            apu.writeRegister(address, value);
+        }
     }
 
     public void writeWord(int address, int value) {

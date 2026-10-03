@@ -8,25 +8,20 @@ public class Timer {
     }
 
     public void step(int tCycles) {
-        int prevCounter = internalCounter;
-        internalCounter = (internalCounter + tCycles) & 0xFFFF;
-
-        mmu.setDivDirectly((internalCounter >> 8) & 0xFF);
-
         int tac = mmu.readByte(0xFF07);
         boolean timerEnabled = (tac & 0x04) != 0;
+        int timerMask = 1 << getBitForFrequency(tac & 0x03);
 
-        if (timerEnabled) {
-            int bitToMonitor = getBitForFrequency(tac & 0x03);
-
-            boolean prevBit = (prevCounter & (1 << bitToMonitor)) != 0;
-            boolean currentBit = (internalCounter & (1 << bitToMonitor)) != 0;
-
-
-            if (prevBit && !currentBit) {
+        for (int cycle = 0; cycle < tCycles; cycle++) {
+            boolean previousSignal = timerEnabled && (internalCounter & timerMask) != 0;
+            internalCounter = (internalCounter + 1) & 0xFFFF;
+            boolean currentSignal = timerEnabled && (internalCounter & timerMask) != 0;
+            if (previousSignal && !currentSignal) {
                 incrementTima();
             }
         }
+
+        mmu.setDivDirectly((internalCounter >> 8) & 0xFF);
     }
 
     private void incrementTima() {

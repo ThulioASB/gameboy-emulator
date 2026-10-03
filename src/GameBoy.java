@@ -8,6 +8,7 @@ public class GameBoy {
 
     public GameBoy() {
         mmu.setTimer(timer);
+        mmu.setApu(apu);
     }
 
     public void runFrame() {

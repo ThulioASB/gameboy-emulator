@@ -1,7 +1,8 @@
 *.class
 bin/
 
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 .settings/
 .classpath
 .project
